@@ -39,7 +39,7 @@ jobs:
           cat server.log
           kill %1
       - name: Build
-        run: pyinstaller --noconfirm --clean --onedir --name speaker-anywhere speaker_anywhere.py
+        run: pyinstaller --noconfirm --clean --onedir --name speaker-anywhere --add-data "assets/icon.png:assets" speaker_anywhere.py
       - name: Stream test (built binary)
         run: |
           ./dist/speaker-anywhere/speaker-anywhere --cli --port 8766 > server2.log 2>&1 &
@@ -81,6 +81,7 @@ jobs:
         run: |
           pyinstaller --noconfirm --clean --windowed --name "Speaker Anywhere" \
             --osx-bundle-identifier com.talls2.speakeranywhere \
+            --icon assets/icon.icns --add-data "assets/icon.png:assets" \
             --add-binary "macos/sa-audio-tap:." speaker_anywhere.py
           codesign --force --deep -s - "dist/Speaker Anywhere.app"
           hdiutil create -volname "Speaker Anywhere" -srcfolder "dist/Speaker Anywhere.app" -ov -format UDZO SpeakerAnywhere-macOS.dmg

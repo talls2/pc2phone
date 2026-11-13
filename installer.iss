@@ -15,6 +15,7 @@ OutputBaseFilename=SpeakerAnywhere-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=assets\icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 ArchitecturesInstallIn64BitMode=x64compatible
 

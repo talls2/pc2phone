@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon.png" width="128" alt="Speaker Anywhere icon"></p>
+
 # Speaker Anywhere
 
 Play your computer's audio on any device that has a browser and a speaker, over Wi-Fi. Phones, tablets, laptops, other PCs. Nothing to install on the receiving device and no virtual cable.
@@ -39,6 +41,6 @@ Linux and macOS packages are built by `.github/workflows/build.yml`. The Linux j
 
 ```
 pip install pyinstaller
-py -3 -m PyInstaller --noconfirm --clean --windowed --onedir --name SpeakerAnywhere --collect-all pyaudiowpatch --distpath build/dist --workpath build/work --specpath build speaker_anywhere.py
+py -3 -m PyInstaller --noconfirm --clean --windowed --onedir --name SpeakerAnywhere --icon assets/icon.ico --add-data "assets/icon.ico;assets" --collect-all pyaudiowpatch --distpath build/dist --workpath build/work --specpath build speaker_anywhere.py
 ISCC.exe installer.iss        # Inno Setup 6 -> output/SpeakerAnywhere-Setup.exe
 ```

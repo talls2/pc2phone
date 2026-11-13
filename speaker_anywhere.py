@@ -533,6 +533,21 @@ def save_config(cfg):
         pass
 
 
+def resource(name):
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, "assets", name)
+
+
+def set_icon(root, tk):
+    try:
+        if IS_WIN:
+            root.iconbitmap(resource("icon.ico"))
+        else:
+            root.iconphoto(True, tk.PhotoImage(file=resource("icon.png")))
+    except Exception:
+        pass
+
+
 def run_gui():
     import ctypes
     import tkinter as tk
@@ -547,6 +562,7 @@ def run_gui():
     root = tk.Tk()
     root.title("Speaker Anywhere")
     root.resizable(False, False)
+    set_icon(root, tk)
     scale = root.winfo_fpixels("1i") / 96
     state = {"server": None}
 
