@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""pc2phone: stream this PC's audio to a phone browser over Wi-Fi, no virtual cable.
+"""Speaker Anywhere: play this PC's audio on any device with a browser and a speaker, over Wi-Fi.
 
     pip install pyaudiowpatch aiohttp qrcode numpy
-    py -3 pc2phone.py            window with a Start/Stop button and the QR code
-    py -3 pc2phone.py --cli      same thing in the terminal
-    py -3 pc2phone.py --firewall allow the port on Private networks (asks for admin)
+    py -3 speaker_anywhere.py            window with a Start/Stop button and the QR code
+    py -3 speaker_anywhere.py --cli      same thing in the terminal
+    py -3 speaker_anywhere.py --firewall allow the port on Private networks (asks for admin)
 """
 import argparse
 import asyncio
@@ -29,7 +29,7 @@ LATENCIES = {"Low (40 ms)": 40, "Normal (80 ms)": 80, "Safe (160 ms)": 160}
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>PC audio</title>
+<title>Speaker Anywhere</title>
 <style>
  body{margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:18px;font:16px -apple-system,system-ui,sans-serif;background:#111;color:#eee}
@@ -238,7 +238,7 @@ def make_app(hub, key, buf, log):
         hub.clients.add(q)
         hub.sockets.add(ws)
         hub.ever_connected = True
-        log(f"Phone connected: {request.remote} ({len(hub.clients)} listening)")
+        log(f"Device connected: {request.remote} ({len(hub.clients)} listening)")
         sender = asyncio.create_task(send_loop(ws, q))
         try:
             async for _ in ws:
@@ -247,7 +247,7 @@ def make_app(hub, key, buf, log):
             sender.cancel()
             hub.clients.discard(q)
             hub.sockets.discard(ws)
-            log(f"Phone disconnected: {request.remote} ({len(hub.clients)} listening)")
+            log(f"Device disconnected: {request.remote} ({len(hub.clients)} listening)")
         return ws
 
     async def close_sockets(app):
@@ -338,14 +338,14 @@ def print_qr(url):
 
 def add_firewall_rule(port):
     import ctypes
-    cmd = (f'/c netsh advfirewall firewall delete rule name="pc2phone" >nul 2>&1 & '
-           f'netsh advfirewall firewall add rule name="pc2phone" dir=in action=allow protocol=TCP '
+    cmd = (f'/c netsh advfirewall firewall delete rule name="Speaker Anywhere" >nul 2>&1 & '
+           f'netsh advfirewall firewall add rule name="Speaker Anywhere" dir=in action=allow protocol=TCP '
            f'localport={port} profile=private & pause')
     ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", cmd, None, 1)
 
 
 def config_path():
-    return os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "pc2phone", "config.json")
+    return os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "speaker-anywhere", "config.json")
 
 
 def load_config():
@@ -379,7 +379,7 @@ def run_gui():
 
     cfg = load_config()
     root = tk.Tk()
-    root.title("PC to Phone")
+    root.title("Speaker Anywhere")
     root.resizable(False, False)
     scale = root.winfo_fpixels("1i") / 96
     state = {"server": None}
@@ -410,7 +410,7 @@ def run_gui():
     url_var = tk.StringVar()
     url_box = ttk.Entry(qr_frame, textvariable=url_var, state="readonly", width=34, justify="center")
     url_box.pack()
-    ttk.Label(qr_frame, text="Scan with the phone camera (same Wi-Fi)").pack(pady=(6, 0))
+    ttk.Label(qr_frame, text="Scan with a phone camera, or open the link (same Wi-Fi)").pack(pady=(6, 0))
 
     def draw_qr(url):
         m = qr_matrix(url)
@@ -429,9 +429,9 @@ def run_gui():
             return
         if srv.hub.clients:
             n = len(srv.hub.clients)
-            text = f"Streaming to {n} phone{'s' if n > 1 else ''}"
+            text = f"Playing on {n} device{'s' if n > 1 else ''}"
         else:
-            text = "Waiting for the phone: scan the QR code"
+            text = "Waiting for a device: scan the QR code or open the link"
         text += f"\n{srv.hub.device}" if srv.hub.device else "\nNo audio output device found"
         status.config(text=text)
         root.after(500, refresh)
@@ -499,7 +499,7 @@ def run_cli(port, latency, chunk_ms):
     except OSError as e:
         sys.exit(f"Can't listen on port {port} ({e}). Try --port 8766.")
     print_qr(srv.url)
-    print(f"Scan with the phone camera (same Wi-Fi), or open:\n  {srv.url}\nCtrl+C to quit.\n")
+    print(f"Scan with a phone camera (same Wi-Fi), or open the link on any device:\n  {srv.url}\nCtrl+C to quit.\n")
     t0 = time.time()
     warned = False
     try:
@@ -507,7 +507,7 @@ def run_cli(port, latency, chunk_ms):
             time.sleep(1)
             if not srv.hub.ever_connected and not warned and time.time() - t0 > 40:
                 warned = True
-                print("No phone connected yet. If the page won't load: allow the app on *Private* networks in the\n"
+                print("No device connected yet. If the page won't load: allow the app on *Private* networks in the\n"
                       "Windows Firewall prompt, make sure this Wi-Fi is set to Private, or run it with --firewall")
     except KeyboardInterrupt:
         srv.stop()
@@ -518,7 +518,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cli", action="store_true", help="run in the terminal instead of opening the window")
     ap.add_argument("--port", type=int, default=None)
-    ap.add_argument("--latency", type=int, default=None, choices=[40, 80, 160], help="phone buffer in ms")
+    ap.add_argument("--latency", type=int, default=None, choices=[40, 80, 160], help="playback buffer in ms")
     ap.add_argument("--chunk-ms", type=int, default=20)
     ap.add_argument("--firewall", action="store_true", help="add a Private-network firewall rule for the port (asks for admin)")
     args = ap.parse_args()

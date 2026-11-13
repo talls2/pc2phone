@@ -1,5 +1,5 @@
-#define AppName "PC to Phone"
-#define AppExe "PC2Phone.exe"
+#define AppName "Speaker Anywhere"
+#define AppExe "SpeakerAnywhere.exe"
 #define AppVersion "1.0.0"
 
 [Setup]
@@ -11,7 +11,7 @@ DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 PrivilegesRequired=admin
 OutputDir=output
-OutputBaseFilename=PC2Phone-Setup
+OutputBaseFilename=SpeakerAnywhere-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -22,15 +22,15 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
 
 [Files]
-Source: "build\dist\PC2Phone\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+Source: "build\dist\SpeakerAnywhere\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""PC to Phone"" dir=in action=allow program=""{app}\{#AppExe}"" profile=private enable=yes"; Flags: runhidden; StatusMsg: "Allowing the app through the firewall (private networks)..."
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Speaker Anywhere"" dir=in action=allow program=""{app}\{#AppExe}"" profile=private enable=yes"; Flags: runhidden; StatusMsg: "Allowing the app through the firewall (private networks)..."
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""PC to Phone"""; Flags: runhidden; RunOnceId: "RemoveFirewallRule"
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Speaker Anywhere"""; Flags: runhidden; RunOnceId: "RemoveFirewallRule"
