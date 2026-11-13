@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Speaker Anywhere: play this PC's audio on any device with a browser and a speaker, over Wi-Fi.
+"""Speaker Anywhere: play this computer's audio on any device with a browser and a speaker, over Wi-Fi.
 
-    pip install pyaudiowpatch aiohttp qrcode numpy
-    py -3 speaker_anywhere.py            window with a Start/Stop button and the QR code
-    py -3 speaker_anywhere.py --cli      same thing in the terminal
-    py -3 speaker_anywhere.py --firewall allow the port on Private networks (asks for admin)
+    pip install -r requirements.txt
+    python speaker_anywhere.py            window with a Start/Stop button and the QR code
+    python speaker_anywhere.py --cli      same thing in the terminal
+    python speaker_anywhere.py --firewall Windows only: allow the port on Private networks (asks for admin)
+
+Windows: WASAPI loopback. Linux: PulseAudio/PipeWire monitor (parec). macOS: ScreenCaptureKit helper.
 """
 import argparse
 import asyncio
@@ -15,14 +17,19 @@ import os
 import secrets
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
 
-import numpy as np
-import pyaudiowpatch as pyaudio
 import qrcode
 from aiohttp import web
+
+IS_WIN = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
+if IS_WIN:
+    import numpy as np
+    import pyaudiowpatch as pyaudio
 
 DEFAULTS = {"latency": 80, "port": 8765}
 LATENCIES = {"Low (40 ms)": 40, "Normal (80 ms)": 80, "Safe (160 ms)": 160}
@@ -152,7 +159,7 @@ def default_loopback():
         p.terminate()
 
 
-def capture_thread(loop, hub, chunk_ms, stop, log):
+def capture_windows(loop, hub, chunk_ms, stop, log):
     last_err = None
     while not stop.is_set():
         p = pyaudio.PyAudio()
@@ -171,6 +178,7 @@ def capture_thread(loop, hub, chunk_ms, stop, log):
                             stream_callback=cb)
             hub.rate = rate
             hub.device = dev["name"].replace(" [Loopback]", "")
+            hub.error = ""
             log(f"Capturing: {hub.device} ({rate} Hz, {ch} ch)")
             last_err = None
             while not stop.wait(2):
@@ -183,6 +191,7 @@ def capture_thread(loop, hub, chunk_ms, stop, log):
         except Exception as e:
             hub.device = ""
             msg = f"{type(e).__name__}: {e}"
+            hub.error = msg
             if msg != last_err:
                 log(f"Capture problem ({msg}); retrying...")
                 last_err = msg
@@ -197,12 +206,113 @@ def capture_thread(loop, hub, chunk_ms, stop, log):
     hub.device = ""
 
 
+def linux_source(chunk_ms):
+    def pick():
+        try:
+            sink = subprocess.check_output(["pactl", "get-default-sink"], text=True, timeout=5).strip()
+        except (OSError, subprocess.SubprocessError):
+            raise RuntimeError("pactl/parec not found: install pulseaudio-utils (PipeWire users: pipewire-pulse)")
+        if not sink:
+            raise RuntimeError("no default audio output")
+        return sink, ["parec", "-d", sink + ".monitor", "--format=s16le", "--rate=48000", "--channels=2",
+                      f"--latency-msec={chunk_ms}"]
+
+    def watch():
+        try:
+            return subprocess.check_output(["pactl", "get-default-sink"], text=True, timeout=5).strip()
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    return pick, watch
+
+
+def mac_helper():
+    here = os.path.dirname(os.path.abspath(__file__))
+    names = [os.path.join(getattr(sys, "_MEIPASS", here), "sa-audio-tap"),
+             os.path.join(here, "macos", "sa-audio-tap")]
+    for p in names:
+        if os.path.exists(p):
+            return p
+    raise RuntimeError("sa-audio-tap helper not found (build: swiftc -O macos/sa-audio-tap.swift -o macos/sa-audio-tap)")
+
+
+def mac_source(chunk_ms):
+    def pick():
+        return "System audio", [mac_helper(), str(chunk_ms)]
+
+    return pick, None
+
+
+def capture_process(loop, hub, chunk_ms, stop, log, pick, watch):
+    size = 48000 * chunk_ms // 1000 * 4
+    last_err = None
+    while not stop.is_set():
+        proc = None
+        try:
+            name, cmd = pick()
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            changed = threading.Event()
+
+            def watcher(proc=proc, name=name):
+                ticks = 0
+                while True:
+                    if stop.wait(1):
+                        proc.kill()
+                        return
+                    if proc.poll() is not None:
+                        return
+                    ticks += 1
+                    if watch and ticks % 2 == 0 and watch() != name:
+                        changed.set()
+                        proc.kill()
+                        return
+
+            threading.Thread(target=watcher, daemon=True).start()
+            hub.rate, hub.device, hub.error = 48000, name, ""
+            log(f"Capturing: {name} (48000 Hz, 2 ch)")
+            last_err = None
+            while True:
+                chunk = proc.stdout.read(size)
+                if len(chunk) < size:
+                    break
+                if chunk.count(0) != len(chunk):
+                    loop.call_soon_threadsafe(hub.push, 48000, chunk)
+            if changed.is_set():
+                log("Default output device changed, switching...")
+                continue
+            if stop.is_set():
+                break
+            proc.wait(timeout=2)
+            err = proc.stderr.read().decode(errors="replace").strip()
+            raise RuntimeError(err.splitlines()[-1] if err else "audio capture process exited")
+        except Exception as e:
+            hub.device = ""
+            msg = str(e) or type(e).__name__
+            hub.error = msg
+            if msg != last_err:
+                log(f"Capture problem ({msg}); retrying...")
+                last_err = msg
+            stop.wait(2)
+        finally:
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+    hub.device = ""
+
+
+def capture_thread(loop, hub, chunk_ms, stop, log):
+    if IS_WIN:
+        return capture_windows(loop, hub, chunk_ms, stop, log)
+    pick, watch = mac_source(chunk_ms) if IS_MAC else linux_source(chunk_ms)
+    return capture_process(loop, hub, chunk_ms, stop, log, pick, watch)
+
+
 class Hub:
     def __init__(self):
         self.clients = set()
         self.sockets = set()
         self.rate = 0
         self.device = ""
+        self.error = ""
         self.ever_connected = False
 
     def push(self, rate, pcm):
@@ -345,7 +455,14 @@ def add_firewall_rule(port):
 
 
 def config_path():
-    return os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "speaker-anywhere", "config.json")
+    home = os.path.expanduser("~")
+    if IS_WIN:
+        base = os.environ.get("APPDATA", home)
+    elif IS_MAC:
+        base = os.path.join(home, "Library", "Application Support")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config"))
+    return os.path.join(base, "speaker-anywhere", "config.json")
 
 
 def load_config():
@@ -432,7 +549,7 @@ def run_gui():
             text = f"Playing on {n} device{'s' if n > 1 else ''}"
         else:
             text = "Waiting for a device: scan the QR code or open the link"
-        text += f"\n{srv.hub.device}" if srv.hub.device else "\nNo audio output device found"
+        text += f"\n{srv.hub.device}" if srv.hub.device else f"\n{srv.hub.error or 'No audio output device found'}"
         status.config(text=text)
         root.after(500, refresh)
 
@@ -527,7 +644,10 @@ if __name__ == "__main__":
     if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     if args.firewall:
-        add_firewall_rule(port)
+        if IS_WIN:
+            add_firewall_rule(port)
+        else:
+            print("--firewall is only needed on Windows. On Linux, allow the port in ufw or firewalld if you use one.")
     elif args.cli:
         run_cli(port, args.latency or cfg["latency"], args.chunk_ms)
     else:

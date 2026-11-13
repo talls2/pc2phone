@@ -1,0 +1,79 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pulseaudio pulseaudio-utils python3-tk
+      - name: Python packages
+        run: pip install -r requirements.txt pyinstaller
+      - name: Virtual sound card
+        run: |
+          pulseaudio -D --exit-idle-time=-1 --log-target=stderr
+          sleep 2
+          pactl load-module module-null-sink sink_name=test
+          pactl set-default-sink test
+          python - <<'EOF'
+          import math, struct, wave
+          w = wave.open("/tmp/tone.wav", "wb")
+          w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000)
+          w.writeframes(b"".join(struct.pack("<hh", int(9000 * math.sin(2 * math.pi * 440 * i / 48000)), 0) for i in range(48000 * 10)))
+          w.close()
+          EOF
+      - name: Stream test (from source)
+        run: |
+          python speaker_anywhere.py --cli --port 8765 > server.log 2>&1 &
+          python tests/stream_test.py server.log paplay --device=test /tmp/tone.wav
+          cat server.log
+          kill %1
+      - name: Build
+        run: pyinstaller --noconfirm --clean --onedir --name speaker-anywhere speaker_anywhere.py
+      - name: Stream test (built binary)
+        run: |
+          ./dist/speaker-anywhere/speaker-anywhere --cli --port 8766 > server2.log 2>&1 &
+          python tests/stream_test.py server2.log paplay --device=test /tmp/tone.wav
+          kill %1
+      - name: Package
+        run: tar -czf SpeakerAnywhere-linux-x64.tar.gz -C dist speaker-anywhere
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SpeakerAnywhere-linux-x64
+          path: SpeakerAnywhere-linux-x64.tar.gz
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build audio helper
+        run: swiftc -O macos/sa-audio-tap.swift -o macos/sa-audio-tap
+      - name: Helper smoke test (no screen-recording permission on CI, so an error message is expected)
+        run: |
+          (./macos/sa-audio-tap 20 > /dev/null) & sleep 4; kill $! 2>/dev/null || true
+      - name: Python packages
+        run: pip install -r requirements.txt pyinstaller
+      - name: Build app
+        run: |
+          pyinstaller --noconfirm --clean --windowed --name "Speaker Anywhere" \
+            --osx-bundle-identifier com.talls2.speakeranywhere \
+            --add-binary "macos/sa-audio-tap:." speaker_anywhere.py
+          codesign --force --deep -s - "dist/Speaker Anywhere.app"
+          hdiutil create -volname "Speaker Anywhere" -srcfolder "dist/Speaker Anywhere.app" -ov -format UDZO SpeakerAnywhere-macOS.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SpeakerAnywhere-macOS
+          path: SpeakerAnywhere-macOS.dmg
