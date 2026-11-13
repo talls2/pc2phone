@@ -16,6 +16,14 @@ Get the file for your system from the [latest release](../../releases/latest).
 | Linux (x64) | `SpeakerAnywhere-linux-x64.tar.gz` | Extract and run `speaker-anywhere/speaker-anywhere`. Needs `pulseaudio-utils` (PipeWire: `pipewire-pulse`). Tested against a real PulseAudio server in CI. |
 | macOS 13+ | `SpeakerAnywhere-macOS.dmg` | Unsigned: right-click the app, Open. On first Start, allow it under System Settings, Privacy & Security, Screen & System Audio Recording. Captures system audio with ScreenCaptureKit. Not yet tested on a real Mac. |
 
+## Code signing
+
+Windows releases are signed using free code signing provided by [SignPath.io](https://signpath.io), with a certificate by the [SignPath Foundation](https://signpath.org). Until signing is active, the installer is unsigned and SmartScreen may warn.
+
+## Privacy
+
+Speaker Anywhere collects no data and sends nothing to the internet. Audio goes only from your computer to devices on your own network that open the link or QR code.
+
 ## How it works
 
 - Windows: WASAPI loopback of the default output device, followed automatically if the default changes.
