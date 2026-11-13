@@ -1,26 +1,41 @@
 # Speaker Anywhere
 
-Play your Windows PC's audio on any device that has a browser and a speaker, over Wi-Fi. Phones, tablets, laptops, other PCs. Nothing to install on the receiving device and no virtual cable.
+Play your computer's audio on any device that has a browser and a speaker, over Wi-Fi. Phones, tablets, laptops, other PCs. Nothing to install on the receiving device and no virtual cable.
 
-## App
+Open the app, press **Start**. The window expands to show a QR code and a link. Scan the code with a phone camera, or open the link on any other device on the same Wi-Fi, then tap **Start** on the page.
 
-Run `SpeakerAnywhere-Setup.exe`, open **Speaker Anywhere**, press **Start**. The window expands to show a QR code and a link. Scan the code with a phone camera, or open the link on any other device on the same Wi-Fi, then tap **Start** on the page.
+## Download
 
-- Captures the default output device with WASAPI loopback and follows it if the default changes.
+Get the file for your system from the [latest release](../../releases/latest).
+
+| System | File | Notes |
+|---|---|---|
+| Windows 10/11 | `SpeakerAnywhere-Setup.exe` | Installer. Unsigned, so SmartScreen may warn: More info, Run anyway. Adds a Private-network firewall rule. |
+| Linux (x64) | `SpeakerAnywhere-linux-x64.tar.gz` | Extract and run `speaker-anywhere/speaker-anywhere`. Needs `pulseaudio-utils` (PipeWire: `pipewire-pulse`). Tested against a real PulseAudio server in CI. |
+| macOS 13+ | `SpeakerAnywhere-macOS.dmg` | Unsigned: right-click the app, Open. On first Start, allow it under System Settings, Privacy & Security, Screen & System Audio Recording. Captures system audio with ScreenCaptureKit. Not yet tested on a real Mac. |
+
+## How it works
+
+- Windows: WASAPI loopback of the default output device, followed automatically if the default changes.
+- Linux: the monitor of the default PulseAudio/PipeWire output, followed if the default changes.
+- macOS: a small Swift helper (`macos/sa-audio-tap.swift`) using ScreenCaptureKit.
 - The receiving device plays with Web Audio and keeps a small jitter buffer (40/80/160 ms), dropping chunks when it falls behind.
 - iPhone silent switch: uses `navigator.audioSession` plus a silent looping `<audio>` element.
-- The installer adds a Private-network firewall rule for the app.
 
 ## From source
 
 ```
-pip install pyaudiowpatch aiohttp qrcode numpy
-py -3 speaker_anywhere.py            # window
-py -3 speaker_anywhere.py --cli      # terminal
-py -3 speaker_anywhere.py --firewall # allow the port on Private networks (asks for admin)
+pip install -r requirements.txt
+python speaker_anywhere.py            # window
+python speaker_anywhere.py --cli      # terminal
+python speaker_anywhere.py --firewall # Windows only: allow the port on Private networks (asks for admin)
 ```
 
-## Build the installer
+On Linux you also need `python3-tk` and `pulseaudio-utils`. On macOS build the helper first: `swiftc -O macos/sa-audio-tap.swift -o macos/sa-audio-tap`.
+
+## Builds
+
+Linux and macOS packages are built by `.github/workflows/build.yml`. The Linux job streams a test tone through a virtual sound card and checks that it arrives. The Windows installer is built locally:
 
 ```
 pip install pyinstaller
