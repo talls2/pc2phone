@@ -45,6 +45,17 @@ jobs:
           ./dist/speaker-anywhere/speaker-anywhere --cli --port 8766 > server2.log 2>&1 &
           python tests/stream_test.py server2.log paplay --device=test /tmp/tone.wav
           kill %1
+      - name: Device selection test
+        run: |
+          pactl load-module module-null-sink sink_name=other
+          pactl set-default-sink other
+          python speaker_anywhere.py --list-devices | tee devices.txt
+          grep -q "^test" devices.txt
+          grep -q "^other" devices.txt
+          python speaker_anywhere.py --cli --port 8767 --device test > server3.log 2>&1 &
+          python tests/stream_test.py server3.log paplay --device=test /tmp/tone.wav
+          grep -q "Capturing: test" server3.log
+          kill %1
       - name: Package
         run: tar -czf SpeakerAnywhere-linux-x64.tar.gz -C dist speaker-anywhere
       - uses: actions/upload-artifact@v4

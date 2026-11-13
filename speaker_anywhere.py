@@ -31,7 +31,8 @@ if IS_WIN:
     import numpy as np
     import pyaudiowpatch as pyaudio
 
-DEFAULTS = {"latency": 80, "port": 8765}
+DEFAULTS = {"latency": 80, "port": 8765, "device": ""}
+DEFAULT_LABEL = "Default output (follows changes)"
 LATENCIES = {"Low (40 ms)": 40, "Normal (80 ms)": 80, "Safe (160 ms)": 160}
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8">
@@ -149,6 +150,15 @@ def to_stereo(data, ch, mix):
     return np.clip(a.astype(np.float32) @ mix, -32768, 32767).astype(np.int16).tobytes()
 
 
+def find_loopback(p, want):
+    if not want:
+        return p.get_default_wasapi_loopback()
+    for d in p.get_loopback_device_info_generator():
+        if d["name"].replace(" [Loopback]", "") == want:
+            return d
+    raise LookupError(f"output device not found: {want}")
+
+
 def default_loopback():
     p = pyaudio.PyAudio()
     try:
@@ -165,7 +175,8 @@ def capture_windows(loop, hub, chunk_ms, stop, log):
         p = pyaudio.PyAudio()
         stream = None
         try:
-            dev = p.get_default_wasapi_loopback()
+            want = hub.want
+            dev = find_loopback(p, want)
             rate, ch = int(dev["defaultSampleRate"]), int(dev["maxInputChannels"])
             mix = mix_matrix(ch) if ch > 2 else None
 
@@ -184,10 +195,14 @@ def capture_windows(loop, hub, chunk_ms, stop, log):
             while not stop.wait(2):
                 if not stream.is_active():
                     raise RuntimeError("capture stream stopped")
-                now = default_loopback()
-                if now is None or now["name"] != dev["name"]:
-                    log("Default output device changed, switching...")
+                if hub.want != want:
+                    log("Output device changed, switching...")
                     break
+                if not want:
+                    now = default_loopback()
+                    if now is None or now["name"] != dev["name"]:
+                        log("Default output device changed, switching...")
+                        break
         except Exception as e:
             hub.device = ""
             msg = f"{type(e).__name__}: {e}"
@@ -206,21 +221,52 @@ def capture_windows(loop, hub, chunk_ms, stop, log):
     hub.device = ""
 
 
-def linux_source(chunk_ms):
-    def pick():
+def linux_default_sink():
+    try:
+        return subprocess.check_output(["pactl", "get-default-sink"], text=True, timeout=5).strip()
+    except (OSError, subprocess.SubprocessError):
+        raise RuntimeError("pactl/parec not found: install pulseaudio-utils (PipeWire users: pipewire-pulse)")
+
+
+def list_outputs():
+    if IS_WIN:
+        p = pyaudio.PyAudio()
         try:
-            sink = subprocess.check_output(["pactl", "get-default-sink"], text=True, timeout=5).strip()
-        except (OSError, subprocess.SubprocessError):
-            raise RuntimeError("pactl/parec not found: install pulseaudio-utils (PipeWire users: pipewire-pulse)")
+            names = {d["name"].replace(" [Loopback]", "") for d in p.get_loopback_device_info_generator()}
+        except Exception:
+            names = set()
+        finally:
+            p.terminate()
+        return [(n, n) for n in sorted(names)]
+    if IS_MAC:
+        return []
+    try:
+        data = json.loads(subprocess.check_output(["pactl", "--format=json", "list", "sinks"], timeout=5))
+        return [(d["name"], d.get("description") or d["name"]) for d in data]
+    except Exception:
+        pass
+    try:
+        out = subprocess.check_output(["pactl", "list", "short", "sinks"], text=True, timeout=5)
+        names = [line.split("\t")[1] for line in out.splitlines() if "\t" in line]
+        return [(n, n) for n in names]
+    except Exception:
+        return []
+
+
+def linux_source(chunk_ms, hub):
+    def pick():
+        sink = hub.want or linux_default_sink()
         if not sink:
             raise RuntimeError("no default audio output")
         return sink, ["parec", "-d", sink + ".monitor", "--format=s16le", "--rate=48000", "--channels=2",
                       f"--latency-msec={chunk_ms}"]
 
     def watch():
+        if hub.want:
+            return None
         try:
-            return subprocess.check_output(["pactl", "get-default-sink"], text=True, timeout=5).strip()
-        except (OSError, subprocess.SubprocessError):
+            return linux_default_sink()
+        except RuntimeError:
             return None
 
     return pick, watch
@@ -249,6 +295,7 @@ def capture_process(loop, hub, chunk_ms, stop, log, pick, watch):
     while not stop.is_set():
         proc = None
         try:
+            want = hub.want
             name, cmd = pick()
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             changed = threading.Event()
@@ -262,7 +309,7 @@ def capture_process(loop, hub, chunk_ms, stop, log, pick, watch):
                     if proc.poll() is not None:
                         return
                     ticks += 1
-                    if watch and ticks % 2 == 0 and watch() != name:
+                    if hub.want != want or (watch and ticks % 2 == 0 and watch() != name):
                         changed.set()
                         proc.kill()
                         return
@@ -278,7 +325,7 @@ def capture_process(loop, hub, chunk_ms, stop, log, pick, watch):
                 if chunk.count(0) != len(chunk):
                     loop.call_soon_threadsafe(hub.push, 48000, chunk)
             if changed.is_set():
-                log("Default output device changed, switching...")
+                log("Output device changed, switching...")
                 continue
             if stop.is_set():
                 break
@@ -302,7 +349,7 @@ def capture_process(loop, hub, chunk_ms, stop, log, pick, watch):
 def capture_thread(loop, hub, chunk_ms, stop, log):
     if IS_WIN:
         return capture_windows(loop, hub, chunk_ms, stop, log)
-    pick, watch = mac_source(chunk_ms) if IS_MAC else linux_source(chunk_ms)
+    pick, watch = mac_source(chunk_ms) if IS_MAC else linux_source(chunk_ms, hub)
     return capture_process(loop, hub, chunk_ms, stop, log, pick, watch)
 
 
@@ -312,6 +359,7 @@ class Hub:
         self.sockets = set()
         self.rate = 0
         self.device = ""
+        self.want = ""
         self.error = ""
         self.ever_connected = False
 
@@ -382,9 +430,10 @@ def lan_ip():
 
 
 class Server:
-    def __init__(self, port, latency, chunk_ms=20, log=lambda *a: None):
+    def __init__(self, port, latency, device="", chunk_ms=20, log=lambda *a: None):
         self.port, self.latency, self.chunk_ms, self.log = port, latency, chunk_ms, log
         self.hub = Hub()
+        self.hub.want = device or ""
         self.key = secrets.token_urlsafe(6)
         self.url = f"http://{lan_ip()}:{port}/?k={self.key}"
 
@@ -506,20 +555,50 @@ def run_gui():
     button = ttk.Button(body, text="Start", width=26)
     button.grid(row=0, column=0, columnspan=2, ipady=8, pady=(0, 12))
 
-    ttk.Label(body, text="Latency").grid(row=1, column=0, sticky="w")
+    device_label = ttk.Label(body, text="Output")
+    outputs = {"labels": {DEFAULT_LABEL: ""}}
+    device_box = ttk.Combobox(body, state="readonly", width=40)
+
+    def load_outputs():
+        labels = {DEFAULT_LABEL: ""}
+        for value, label in list_outputs():
+            labels[label if label not in labels else f"{label} ({value})"] = value
+        outputs["labels"] = labels
+        device_box.config(values=list(labels))
+
+    def device_value():
+        return outputs["labels"].get(device_box.get(), "")
+
+    def device_changed(event=None):
+        value = device_value()
+        cfg["device"] = value
+        save_config(cfg)
+        if state["server"]:
+            state["server"].hub.want = value
+
+    load_outputs()
+    saved = next((lbl for lbl, v in outputs["labels"].items() if v == cfg.get("device", "")), DEFAULT_LABEL)
+    device_box.set(saved)
+    device_box.config(postcommand=load_outputs)
+    device_box.bind("<<ComboboxSelected>>", device_changed)
+    if len(outputs["labels"]) > 1:
+        device_label.grid(row=1, column=0, sticky="w")
+        device_box.grid(row=1, column=1, sticky="e", pady=2)
+
+    ttk.Label(body, text="Latency").grid(row=2, column=0, sticky="w")
     names = list(LATENCIES)
     current = next((n for n, v in LATENCIES.items() if v == cfg["latency"]), names[1])
     latency_box = ttk.Combobox(body, values=names, state="readonly", width=16)
     latency_box.set(current)
-    latency_box.grid(row=1, column=1, sticky="e", pady=2)
+    latency_box.grid(row=2, column=1, sticky="e", pady=2)
 
-    ttk.Label(body, text="Port").grid(row=2, column=0, sticky="w")
+    ttk.Label(body, text="Port").grid(row=3, column=0, sticky="w")
     port_var = tk.StringVar(value=str(cfg["port"]))
     port_box = ttk.Spinbox(body, from_=1024, to=65535, textvariable=port_var, width=18)
-    port_box.grid(row=2, column=1, sticky="e", pady=2)
+    port_box.grid(row=3, column=1, sticky="e", pady=2)
 
     status = ttk.Label(body, text="Stopped", wraplength=int(260 * scale))
-    status.grid(row=3, column=0, columnspan=2, pady=(12, 0))
+    status.grid(row=4, column=0, columnspan=2, pady=(12, 0))
 
     qr_frame = ttk.Frame(body)
     canvas = tk.Canvas(qr_frame, highlightthickness=0, bg="white")
@@ -567,8 +646,9 @@ def run_gui():
             status.config(text="Port must be a number between 1024 and 65535")
             return
         latency = LATENCIES[latency_box.get()]
-        save_config({"latency": latency, "port": port})
-        srv = Server(port, latency)
+        cfg.update({"latency": latency, "port": port, "device": device_value()})
+        save_config(cfg)
+        srv = Server(port, latency, device_value())
         try:
             srv.start()
         except OSError:
@@ -579,7 +659,7 @@ def run_gui():
         button.config(text="Stop")
         url_var.set(srv.url)
         draw_qr(srv.url)
-        qr_frame.grid(row=4, column=0, columnspan=2)
+        qr_frame.grid(row=5, column=0, columnspan=2)
         root.geometry("")
         refresh()
 
@@ -609,8 +689,8 @@ def run_gui():
     root.mainloop()
 
 
-def run_cli(port, latency, chunk_ms):
-    srv = Server(port, latency, chunk_ms, log=print)
+def run_cli(port, latency, device, chunk_ms):
+    srv = Server(port, latency, device, chunk_ms, log=print)
     try:
         srv.start()
     except OSError as e:
@@ -636,6 +716,8 @@ if __name__ == "__main__":
     ap.add_argument("--cli", action="store_true", help="run in the terminal instead of opening the window")
     ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--latency", type=int, default=None, choices=[40, 80, 160], help="playback buffer in ms")
+    ap.add_argument("--device", default=None, help="output device to capture (default: the system default, see --list-devices)")
+    ap.add_argument("--list-devices", action="store_true", help="list output devices and exit")
     ap.add_argument("--chunk-ms", type=int, default=20)
     ap.add_argument("--firewall", action="store_true", help="add a Private-network firewall rule for the port (asks for admin)")
     args = ap.parse_args()
@@ -643,12 +725,15 @@ if __name__ == "__main__":
     port = args.port or cfg["port"]
     if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
-    if args.firewall:
+    if args.list_devices:
+        outs = list_outputs()
+        print("\n".join(f"{v}" + (f"  ({l})" if l != v else "") for v, l in outs) or "No selectable devices on this system.")
+    elif args.firewall:
         if IS_WIN:
             add_firewall_rule(port)
         else:
             print("--firewall is only needed on Windows. On Linux, allow the port in ufw or firewalld if you use one.")
     elif args.cli:
-        run_cli(port, args.latency or cfg["latency"], args.chunk_ms)
+        run_cli(port, args.latency or cfg["latency"], cfg["device"] if args.device is None else args.device, args.chunk_ms)
     else:
         run_gui()

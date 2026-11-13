@@ -2,7 +2,7 @@
 
 Play your computer's audio on any device that has a browser and a speaker, over Wi-Fi. Phones, tablets, laptops, other PCs. Nothing to install on the receiving device and no virtual cable.
 
-Open the app, press **Start**. The window expands to show a QR code and a link. Scan the code with a phone camera, or open the link on any other device on the same Wi-Fi, then tap **Start** on the page.
+Open the app, press **Start**. It listens to your default output by default; the **Output** list lets you pick a specific device instead, even while it is running (`--device NAME` and `--list-devices` do the same in the terminal; macOS always captures the system mix). The window expands to show a QR code and a link. Scan the code with a phone camera, or open the link on any other device on the same Wi-Fi, then tap **Start** on the page.
 
 ## Download
 
